@@ -1,5 +1,8 @@
 {
-  "name": "eurofour-api",
+  "name": "eurofour-admin",
+  "version": "1.0.0",
+  "description": "EuroFour Support & Ticket API",
+  "main": "server.js",
   "type": "module",
   "scripts": {
     "start": "node server.js"
