@@ -131,9 +131,9 @@ app.delete('/admin/tickets/:id', authMiddleware, (req, res) => {
     }
 });
 
-// ENDPOINT: Sends email via Brevo HTTPS API
+// ENDPOINT: Sends email via Brevo HTTPS API and auto-deletes the ticket
 app.post('/admin/send-reply', authMiddleware, async (req, res) => {
-    const { to, subject, message } = req.body;
+    const { ticketId, to, subject, message } = req.body;
 
     if (!to || !message) {
         return res.status(400).json({ success: false, error: 'Recipient email and message are required.' });
@@ -165,6 +165,14 @@ app.post('/admin/send-reply', authMiddleware, async (req, res) => {
         const data = await response.json();
 
         if (response.ok) {
+            // Email sent successfully! Automatically delete the ticket from the database.
+            if (ticketId) {
+                try {
+                    db.prepare('DELETE FROM tickets WHERE id = ?').run(ticketId);
+                } catch (dbErr) {
+                    console.error('Failed to auto-delete ticket after reply:', dbErr);
+                }
+            }
             res.json({ success: true });
         } else {
             console.error('Brevo API Error:', data);
@@ -260,7 +268,6 @@ app.get('/admin', authMiddleware, (req, res) => {
                         const result = await response.json();
                         
                         if (result.success) {
-                            // Remove the ticket element from the DOM without refreshing the page
                             document.getElementById('ticket-' + ticketId).remove();
                         } else {
                             alert('Failed to delete: ' + (result.error || 'Unknown error'));
@@ -292,6 +299,7 @@ app.get('/admin', authMiddleware, (req, res) => {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
+                                ticketId: ticketId,
                                 to: recipientEmail,
                                 subject: subject,
                                 message: message
@@ -301,7 +309,8 @@ app.get('/admin', authMiddleware, (req, res) => {
                         const result = await response.json();
 
                         if (result.success) {
-                            alert('Email successfully sent directly to ' + recipientEmail + '!');
+                            alert('Email successfully sent! The ticket will now be deleted.');
+                            document.getElementById('ticket-' + ticketId).remove();
                         } else {
                             alert('Failed to send email: ' + (result.error || 'Unknown error'));
                         }
