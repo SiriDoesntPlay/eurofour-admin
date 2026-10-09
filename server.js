@@ -30,7 +30,12 @@ try {
     // Column exists
 }
 
-app.use(cors());
+// Configured CORS middleware for WebKit / iOS compatibility
+app.use(cors({
+    origin: true,
+    credentials: true
+}));
+
 app.use(express.json());
 
 // Redirect root to admin
