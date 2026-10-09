@@ -100,17 +100,64 @@ app.get('/', (req, res) => {
     res.redirect('/admin');
 });
 
-// THE API: Receives tickets from Electron App
+// THE API: Receives tickets from Electron App and sends Admin Notification
 app.post('/api/tickets', (req, res) => {
     const { email, issue, version, type } = req.body;
+    const ticketType = type || 'ticket';
+    const userEmail = email || 'Anonymous';
     
     try {
         const stmt = db.prepare('INSERT INTO tickets (email, issue, version, type) VALUES (?, ?, ?, ?)');
-        stmt.run(email || 'Anonymous', issue, version, type || 'ticket');
+        stmt.run(userEmail, issue, version, ticketType);
+        
+        // Respond to the client immediately so they aren't waiting for the email dispatch
         res.status(201).json({ success: true });
+
+        // --- Send Automated Admin Notification via Brevo ---
+        const apiKey = process.env.BREVO_API_KEY;
+        const senderEmail = process.env.EMAIL_USER || 'eurofour.support@gmail.com';
+        
+        if (apiKey) {
+            const adminEmail = 'syki2008@gmail.com';
+            const subject = `New ${ticketType === 'bug' ? 'Bug Report' : 'Help Ticket'} submitted (EuroFour Bridge)`;
+            const message = `
+You have received a new ${ticketType === 'bug' ? 'Bug Report' : 'Help Ticket'}!
+
+From: ${userEmail}
+App Version: ${version || 'Unknown'}
+
+Issue:
+${issue}
+
+Click here to view and respond:
+https://eurofour-admin-production.up.railway.app/admin
+            `.trim();
+
+            // Run fetch in the background
+            fetch('https://api.brevo.com/v3/smtp/email', {
+                method: 'POST',
+                headers: {
+                    'accept': 'application/json',
+                    'api-key': apiKey,
+                    'content-type': 'application/json'
+                },
+                body: JSON.stringify({
+                    sender: { name: 'EuroFour System', email: senderEmail },
+                    to: [{ email: adminEmail }],
+                    subject: subject,
+                    textContent: message
+                })
+            }).catch(emailErr => {
+                console.error('Failed to send admin notification email:', emailErr);
+            });
+        }
+        
     } catch (error) {
         console.error('Database Error:', error);
-        res.status(500).json({ error: 'Failed to save ticket' });
+        // Ensure we only try to send an error response if we haven't already sent a success one
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Failed to save ticket' });
+        }
     }
 });
 
@@ -318,8 +365,10 @@ app.get('/admin', authMiddleware, (req, res) => {
                         console.error('Error sending email:', err);
                         alert('Server connection error while sending email.');
                     } finally {
-                        sendBtn.disabled = false;
-                        sendBtn.textContent = 'Send Direct Email';
+                        if (document.getElementById('btn-' + ticketId)) {
+                            sendBtn.disabled = false;
+                            sendBtn.textContent = 'Send Direct Email';
+                        }
                     }
                 }
             </script>
