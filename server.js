@@ -114,6 +114,23 @@ app.post('/api/tickets', (req, res) => {
     }
 });
 
+// ENDPOINT: Permanently delete a ticket/bug report from disk
+app.delete('/admin/tickets/:id', authMiddleware, (req, res) => {
+    try {
+        const stmt = db.prepare('DELETE FROM tickets WHERE id = ?');
+        const info = stmt.run(req.params.id);
+        
+        if (info.changes > 0) {
+            res.json({ success: true });
+        } else {
+            res.status(404).json({ success: false, error: 'Ticket not found' });
+        }
+    } catch (error) {
+        console.error('Delete error:', error);
+        res.status(500).json({ success: false, error: 'Database error while deleting' });
+    }
+});
+
 // ENDPOINT: Sends email via Brevo HTTPS API
 app.post('/admin/send-reply', authMiddleware, async (req, res) => {
     const { to, subject, message } = req.body;
@@ -173,6 +190,7 @@ app.get('/admin', authMiddleware, (req, res) => {
                 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #18181b; color: #fff; padding: 15px; max-width: 800px; margin: 0 auto; }
                 .ticket { background: #27272a; padding: 20px; margin-bottom: 20px; border-radius: 8px; border-left: 4px solid #38bdf8; }
                 .ticket.bug { border-left-color: #ef4444; }
+                .ticket-header { display: flex; justify-content: space-between; align-items: flex-start; }
                 .email { color: #38bdf8; font-weight: bold; font-size: 1.1em; text-decoration: none; word-break: break-all; }
                 .meta { color: #a1a1aa; font-size: 0.85em; margin-top: 5px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #3f3f46; display: flex; flex-wrap: wrap; gap: 15px; }
                 .issue { line-height: 1.5; white-space: pre-wrap; background: #1f1f22; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 13px; word-break: break-word;}
@@ -187,6 +205,9 @@ app.get('/admin', authMiddleware, (req, res) => {
                 .btn-send { padding: 8px 16px; background: #38bdf8; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
                 .btn-send:hover { background: #0284c7; color: white; }
                 .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+                .btn-delete { padding: 5px 12px; background: #7f1d1d; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 0.75em; text-transform: uppercase; }
+                .btn-delete:hover { background: #b91c1c; }
             </style>
         </head>
         <body>
@@ -195,9 +216,12 @@ app.get('/admin', authMiddleware, (req, res) => {
                 const defaultTemplate = `Hello,\n\nThank you for reaching out to support.\n\nRegarding the issue you described, I quote:\n"${t.issue}"\n\n[ Type your custom response here ]\n\nBest regards,\nShayzee, EuroFour Developer`;
 
                 return `
-                <div class="ticket ${t.type}">
-                    <div>
-                        <span class="badge ${t.type}">${t.type === 'bug' ? 'Bug Report' : 'Help Ticket'}</span>${t.type === 'ticket' ? `<a href="mailto:${t.email}" class="email" style="margin-left: 10px;">${t.email}</a>` : `<span style="margin-left: 10px; color: #a1a1aa;">Anonymous</span>`}
+                <div class="ticket ${t.type}" id="ticket-${t.id}">
+                    <div class="ticket-header">
+                        <div>
+                            <span class="badge ${t.type}">${t.type === 'bug' ? 'Bug Report' : 'Help Ticket'}</span>${t.type === 'ticket' ? `<a href="mailto:${t.email}" class="email" style="margin-left: 10px;">${t.email}</a>` : `<span style="margin-left: 10px; color: #a1a1aa;">Anonymous</span>`}
+                        </div>
+                        <button class="btn-delete" onclick="deleteTicket(${t.id})">Delete</button>
                     </div>
                     <div class="meta">
                         <span><strong>App Version:</strong> ${t.version}</span>
@@ -223,6 +247,30 @@ app.get('/admin', authMiddleware, (req, res) => {
             }).join('') || '<p>No tickets yet. You are all caught up!</p>'}
 
             <script>
+                async function deleteTicket(ticketId) {
+                    if (!confirm('Are you sure you want to permanently delete this?')) {
+                        return;
+                    }
+
+                    try {
+                        const response = await fetch('/admin/tickets/' + ticketId, {
+                            method: 'DELETE'
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            // Remove the ticket element from the DOM without refreshing the page
+                            document.getElementById('ticket-' + ticketId).remove();
+                        } else {
+                            alert('Failed to delete: ' + (result.error || 'Unknown error'));
+                        }
+                    } catch (err) {
+                        console.error('Error deleting ticket:', err);
+                        alert('Server connection error while deleting ticket.');
+                    }
+                }
+
                 async function sendServerReply(ticketId, recipientEmail) {
                     const subjectInput = document.getElementById('subject-' + ticketId);
                     const messageInput = document.getElementById('message-' + ticketId);
