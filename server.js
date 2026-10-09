@@ -138,7 +138,7 @@ app.get('/admin', (req, res) => {
         <body>
             <h2>EuroFour Support Inbox</h2>
             ${tickets.map(t => {
-                const defaultTemplate = `Hello,\n\nThank you for reaching out regarding your support ticket.\n\nWe have reviewed your request regarding:\n"${t.issue}"\n\nBest regards,\nEuroFour Support Team`;
+                const defaultTemplate = `Hello,\n\nThank you for reaching out to support.\n\nRegarding the issue you described, I quote:\n"${t.issue}"\n\n[ Type your custom response here ]\n\nBest regards,\nShayzee, EuroFour Developer`;
 
                 return `
                 <div class="ticket ${t.type}">
