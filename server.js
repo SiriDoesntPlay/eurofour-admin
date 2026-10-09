@@ -1,7 +1,7 @@
 import express from 'express';
 import Database from 'better-sqlite3';
 import cors from 'cors';
-import basicAuth from 'express-basic-auth';
+import cookieParser from 'cookie-parser';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -30,13 +30,70 @@ try {
     // Column exists
 }
 
-// Configured CORS middleware for WebKit / iOS compatibility
 app.use(cors({
     origin: true,
     credentials: true
 }));
 
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser('eurofour-secret-key'));
+
+const adminPassword = process.env.ADMIN_PASSWORD || 'secret123';
+
+// Auth Middleware using Cookies (Compatible with iOS Safari)
+function authMiddleware(req, res, next) {
+    if (req.signedCookies.admin_session === 'authenticated') {
+        return next();
+    }
+    
+    // Check Basic Auth header as fallback for API tools
+    const authHeader = req.headers.authorization;
+    if (authHeader) {
+        const credentials = Buffer.from(authHeader.split(' ')[1] || '', 'base64').toString().split(':');
+        if (credentials[1] === adminPassword) {
+            return next();
+        }
+    }
+
+    res.status(401).send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>EuroFour Admin Login</title>
+            <style>
+                body { font-family: sans-serif; background: #18181b; color: #fff; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+                form { background: #27272a; padding: 25px; border-radius: 8px; width: 280px; display: flex; flex-direction: column; gap: 12px; border: 1px solid #3f3f46; }
+                input { padding: 10px; border-radius: 4px; border: 1px solid #3f3f46; background: #18181b; color: #fff; }
+                button { padding: 10px; background: #38bdf8; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+            </style>
+        </head>
+        <body>
+            <form action="/admin/login" method="POST">
+                <h3>Admin Login</h3>
+                <input type="password" name="password" placeholder="Admin Password" required autofocus>
+                <button type="submit">Login</button>
+            </form>
+        </body>
+        </html>
+    `);
+}
+
+// Login Endpoint
+app.post('/admin/login', (req, res) => {
+    const { password } = req.body;
+    if (password === adminPassword) {
+        res.cookie('admin_session', 'authenticated', {
+            httpOnly: true,
+            signed: true,
+            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+        });
+        res.redirect('/admin');
+    } else {
+        res.status(401).send('Incorrect password. <a href="/admin">Try again</a>');
+    }
+});
 
 // Redirect root to admin
 app.get('/', (req, res) => {
@@ -57,16 +114,8 @@ app.post('/api/tickets', (req, res) => {
     }
 });
 
-// ADMIN AUTHENTICATION
-const adminPassword = process.env.ADMIN_PASSWORD || 'secret123';
-
-app.use('/admin', basicAuth({
-    users: { 'admin': adminPassword },
-    challenge: true 
-}));
-
-// ENDPOINT: Sends email via Brevo HTTPS API (Bypasses Railway SMTP port blocks)
-app.post('/admin/send-reply', async (req, res) => {
+// ENDPOINT: Sends email via Brevo HTTPS API
+app.post('/admin/send-reply', authMiddleware, async (req, res) => {
     const { to, subject, message } = req.body;
 
     if (!to || !message) {
@@ -111,26 +160,26 @@ app.post('/admin/send-reply', async (req, res) => {
 });
 
 // DASHBOARD VIEW
-app.get('/admin', (req, res) => {
+app.get('/admin', authMiddleware, (req, res) => {
     const tickets = db.prepare("SELECT * FROM tickets ORDER BY created_at DESC").all();
 
     let html = `
         <!DOCTYPE html>
         <html>
         <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>EuroFour Support Admin</title>
             <style>
-                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #18181b; color: #fff; padding: 30px; max-width: 800px; margin: 0 auto; }
+                body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #18181b; color: #fff; padding: 15px; max-width: 800px; margin: 0 auto; }
                 .ticket { background: #27272a; padding: 20px; margin-bottom: 20px; border-radius: 8px; border-left: 4px solid #38bdf8; }
                 .ticket.bug { border-left-color: #ef4444; }
-                .email { color: #38bdf8; font-weight: bold; font-size: 1.1em; text-decoration: none; }
-                .meta { color: #a1a1aa; font-size: 0.85em; margin-top: 5px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #3f3f46; display: flex; gap: 15px; }
-                .issue { line-height: 1.5; white-space: pre-wrap; background: #1f1f22; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 13px;}
+                .email { color: #38bdf8; font-weight: bold; font-size: 1.1em; text-decoration: none; word-break: break-all; }
+                .meta { color: #a1a1aa; font-size: 0.85em; margin-top: 5px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #3f3f46; display: flex; flex-wrap: wrap; gap: 15px; }
+                .issue { line-height: 1.5; white-space: pre-wrap; background: #1f1f22; padding: 15px; border-radius: 4px; font-family: monospace; font-size: 13px; word-break: break-word;}
                 .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; text-transform: uppercase; }
                 .badge.ticket { background: #0284c7; color: white; }
                 .badge.bug { background: #991b1b; color: white; }
                 
-                /* Reply Form Styles */
                 .reply-box { margin-top: 15px; background: #18181b; padding: 15px; border-radius: 6px; border: 1px solid #3f3f46; }
                 .reply-box label { font-size: 12px; color: #a1a1aa; text-transform: uppercase; display: block; margin-bottom: 5px; }
                 .reply-box input, .reply-box textarea { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; padding: 8px 12px; border-radius: 4px; margin-bottom: 10px; font-family: inherit; }
