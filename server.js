@@ -2,7 +2,6 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import cors from 'cors';
 import basicAuth from 'express-basic-auth';
-import nodemailer from 'nodemailer';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -30,17 +29,6 @@ try {
 } catch (error) {
     // Column exists
 }
-
-// Nodemailer Transporter Setup
-const transporter = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true, // use SSL
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS
-    }
-});
 
 app.use(cors());
 app.use(express.json());
@@ -72,7 +60,7 @@ app.use('/admin', basicAuth({
     challenge: true 
 }));
 
-// ENDPOINT: Server sends email response directly
+// ENDPOINT: Sends email via Brevo HTTPS API (Bypasses Railway SMTP port blocks)
 app.post('/admin/send-reply', async (req, res) => {
     const { to, subject, message } = req.body;
 
@@ -80,15 +68,37 @@ app.post('/admin/send-reply', async (req, res) => {
         return res.status(400).json({ success: false, error: 'Recipient email and message are required.' });
     }
 
+    const apiKey = process.env.BREVO_API_KEY;
+    const senderEmail = process.env.EMAIL_USER || 'eurofour.support@gmail.com';
+
+    if (!apiKey) {
+        return res.status(500).json({ success: false, error: 'BREVO_API_KEY environment variable is missing.' });
+    }
+
     try {
-        await transporter.sendMail({
-            from: `"EuroFour Support" <${process.env.EMAIL_USER}>`,
-            to: to,
-            subject: subject || 'Re: EuroFour Support Ticket',
-            text: message
+        const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+            method: 'POST',
+            headers: {
+                'accept': 'application/json',
+                'api-key': apiKey,
+                'content-type': 'application/json'
+            },
+            body: JSON.stringify({
+                sender: { name: 'EuroFour Support', email: senderEmail },
+                to: [{ email: to }],
+                subject: subject || 'Re: EuroFour Support Ticket',
+                textContent: message
+            })
         });
 
-        res.json({ success: true });
+        const data = await response.json();
+
+        if (response.ok) {
+            res.json({ success: true });
+        } else {
+            console.error('Brevo API Error:', data);
+            res.status(500).json({ success: false, error: data.message || 'Brevo API error' });
+        }
     } catch (error) {
         console.error('Failed to send email:', error);
         res.status(500).json({ success: false, error: error.message });
