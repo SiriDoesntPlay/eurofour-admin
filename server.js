@@ -2,17 +2,18 @@ import express from 'express';
 import Database from 'better-sqlite3';
 import cors from 'cors';
 import basicAuth from 'express-basic-auth';
+import nodemailer from 'nodemailer';
 
 const app = express();
 const port = process.env.PORT || 3000;
 
+// SQLite Database Setup
 const dbPath = process.env.RAILWAY_VOLUME_MOUNT_PATH 
     ? `${process.env.RAILWAY_VOLUME_MOUNT_PATH}/tickets.db` 
     : 'tickets.db';
 
 const db = new Database(dbPath);
 
-// Initialize Database Table
 db.exec(`
   CREATE TABLE IF NOT EXISTS tickets (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -24,12 +25,20 @@ db.exec(`
   )
 `);
 
-// Safely add the 'type' column if updating an existing database
 try {
     db.exec(`ALTER TABLE tickets ADD COLUMN type TEXT DEFAULT 'ticket'`);
 } catch (error) {
-    // Column already exists, safe to ignore
+    // Column exists
 }
+
+// Nodemailer Transporter Setup
+const transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS
+    }
+});
 
 app.use(cors());
 app.use(express.json());
@@ -39,7 +48,7 @@ app.get('/', (req, res) => {
     res.redirect('/admin');
 });
 
-// THE API: Receives tickets from Electron
+// THE API: Receives tickets from Electron App
 app.post('/api/tickets', (req, res) => {
     const { email, issue, version, type } = req.body;
     
@@ -53,7 +62,7 @@ app.post('/api/tickets', (req, res) => {
     }
 });
 
-// THE DASHBOARD: Admin view
+// ADMIN AUTHENTICATION
 const adminPassword = process.env.ADMIN_PASSWORD || 'secret123';
 
 app.use('/admin', basicAuth({
@@ -61,12 +70,32 @@ app.use('/admin', basicAuth({
     challenge: true 
 }));
 
+// ENDPOINT: Server sends email response directly
+app.post('/admin/send-reply', async (req, res) => {
+    const { to, subject, message } = req.body;
+
+    if (!to || !message) {
+        return res.status(400).json({ success: false, error: 'Recipient email and message are required.' });
+    }
+
+    try {
+        await transporter.sendMail({
+            from: `"EuroFour Support" <${process.env.EMAIL_USER}>`,
+            to: to,
+            subject: subject || 'Re: EuroFour Support Ticket',
+            text: message
+        });
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Failed to send email:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// DASHBOARD VIEW
 app.get('/admin', (req, res) => {
     const tickets = db.prepare("SELECT * FROM tickets ORDER BY created_at DESC").all();
-    
-    // The email template (URL encoded for the mailto link)
-    const emailSubject = encodeURIComponent("Re: EuroFour Support Ticket");
-    const emailBody = encodeURIComponent("Hello,\n\nThank you for reaching out regarding your issue. \n\nWe have reviewed your ticket and...\n\nBest regards,\nEuroFour Developer");
 
     let html = `
         <!DOCTYPE html>
@@ -75,7 +104,7 @@ app.get('/admin', (req, res) => {
             <title>EuroFour Support Admin</title>
             <style>
                 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #18181b; color: #fff; padding: 30px; max-width: 800px; margin: 0 auto; }
-                .ticket { background: #27272a; padding: 20px; margin-bottom: 15px; border-radius: 8px; border-left: 4px solid #38bdf8; position: relative; }
+                .ticket { background: #27272a; padding: 20px; margin-bottom: 20px; border-radius: 8px; border-left: 4px solid #38bdf8; }
                 .ticket.bug { border-left-color: #ef4444; }
                 .email { color: #38bdf8; font-weight: bold; font-size: 1.1em; text-decoration: none; }
                 .meta { color: #a1a1aa; font-size: 0.85em; margin-top: 5px; margin-bottom: 15px; padding-bottom: 10px; border-bottom: 1px solid #3f3f46; display: flex; gap: 15px; }
@@ -83,13 +112,23 @@ app.get('/admin', (req, res) => {
                 .badge { padding: 3px 8px; border-radius: 4px; font-size: 0.8em; font-weight: bold; text-transform: uppercase; }
                 .badge.ticket { background: #0284c7; color: white; }
                 .badge.bug { background: #991b1b; color: white; }
-                .btn-reply { display: inline-block; margin-top: 15px; padding: 8px 16px; background: #38bdf8; color: #000; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 0.9em; transition: background 0.2s;}
-                .btn-reply:hover { background: #0284c7; color: white; }
+                
+                /* Reply Form Styles */
+                .reply-box { margin-top: 15px; background: #18181b; padding: 15px; border-radius: 6px; border: 1px solid #3f3f46; }
+                .reply-box label { font-size: 12px; color: #a1a1aa; text-transform: uppercase; display: block; margin-bottom: 5px; }
+                .reply-box input, .reply-box textarea { width: 100%; box-sizing: border-box; background: #27272a; border: 1px solid #3f3f46; color: #fff; padding: 8px 12px; border-radius: 4px; margin-bottom: 10px; font-family: inherit; }
+                .reply-box textarea { min-height: 90px; resize: vertical; }
+                .btn-send { padding: 8px 16px; background: #38bdf8; color: #000; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.2s; }
+                .btn-send:hover { background: #0284c7; color: white; }
+                .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
             </style>
         </head>
         <body>
             <h2>EuroFour Support Inbox</h2>
-            ${tickets.map(t => `
+            ${tickets.map(t => {
+                const defaultTemplate = `Hello,\n\nThank you for reaching out regarding your support ticket.\n\nWe have reviewed your request regarding:\n"${t.issue}"\n\nBest regards,\nEuroFour Support Team`;
+
+                return `
                 <div class="ticket ${t.type}">
                     <div>
                         <span class="badge ${t.type}">${t.type === 'bug' ? 'Bug Report' : 'Help Ticket'}</span>${t.type === 'ticket' ? `<a href="mailto:${t.email}" class="email" style="margin-left: 10px;">${t.email}</a>` : `<span style="margin-left: 10px; color: #a1a1aa;">Anonymous</span>`}
@@ -98,13 +137,69 @@ app.get('/admin', (req, res) => {
                         <span><strong>App Version:</strong> ${t.version}</span>
                         <span><strong>Date:</strong> ${t.created_at}</span>
                     </div>
-                    <div class="issue">${t.issue}</div>${t.type === 'ticket' ? `
-                        <a href="mailto:${t.email}?subject=${emailSubject}&body=${emailBody}" class="btn-reply">
-                            &#x2709; Reply with Template
-                        </a>
+                    <div class="issue">${t.issue}</div>
+
+                    ${t.type === 'ticket' ? `
+                        <div class="reply-box">
+                            <label>Reply Subject</label>
+                            <input type="text" id="subject-${t.id}" value="Re: EuroFour Support Ticket">
+                            
+                            <label>Reply Message</label>
+                            <textarea id="message-${t.id}">${defaultTemplate}</textarea>
+                            
+                            <button id="btn-${t.id}" class="btn-send" onclick="sendServerReply(${t.id}, '${t.email}')">
+                                Send Direct Email
+                            </button>
+                        </div>
                     ` : ''}
                 </div>
-            `).join('') || '<p>No tickets yet. You are all caught up!</p>'}
+                `;
+            }).join('') || '<p>No tickets yet. You are all caught up!</p>'}
+
+            <script>
+                async function sendServerReply(ticketId, recipientEmail) {
+                    const subjectInput = document.getElementById('subject-' + ticketId);
+                    const messageInput = document.getElementById('message-' + ticketId);
+                    const sendBtn = document.getElementById('btn-' + ticketId);
+
+                    const subject = subjectInput.value.trim();
+                    const message = messageInput.value.trim();
+
+                    if (!message) {
+                        alert('Message text cannot be empty.');
+                        return;
+                    }
+
+                    sendBtn.disabled = true;
+                    sendBtn.textContent = 'Sending...';
+
+                    try {
+                        const response = await fetch('/admin/send-reply', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                to: recipientEmail,
+                                subject: subject,
+                                message: message
+                            })
+                        });
+
+                        const result = await response.json();
+
+                        if (result.success) {
+                            alert('Email successfully sent directly to ' + recipientEmail + '!');
+                        } else {
+                            alert('Failed to send email: ' + (result.error || 'Unknown error'));
+                        }
+                    } catch (err) {
+                        console.error('Error sending email:', err);
+                        alert('Server connection error while sending email.');
+                    } finally {
+                        sendBtn.disabled = false;
+                        sendBtn.textContent = 'Send Direct Email';
+                    }
+                }
+            </script>
         </body>
         </html>
     `;
