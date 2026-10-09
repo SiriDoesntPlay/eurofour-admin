@@ -1,5 +1,5 @@
 {
-  "name": "eurofour-backend",
+  "name": "eurofour-admin",
   "version": "1.0.0",
   "description": "EuroFour Support & Ticket API",
   "main": "server.js",
